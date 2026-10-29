@@ -21,9 +21,14 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.util.ArrayList;
@@ -36,13 +41,15 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final String PREFS="a55_ultra_preferences";
     private static final String P_PALETTE="palette_index", P_TEXTURE="texture_index";
+    private static final String P_SPEED="scroll_speed", P_HAPTIC="haptic", P_PARTICLES="particles", P_MAGNET="magnet";
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
-    private int generation=0, paletteIndex=1, textureIndex=0;
-    private SharedPreferences prefs;
-    private PackageManager pm;
-    private LinearLayout root,cardsRow;
-    private TextView countLabel;
+    private int generation=0, paletteIndex=1, textureIndex=0, scrollSpeed=100;
+    private boolean haptics=true, particles=true, magnetic=true;
+    private SharedPreferences prefs; private PackageManager pm;
+    private LinearLayout root,cardsRow; private TextView countLabel;
+    private HapticScrollView scroller;
+
     private static final class Palette {
         String name,desc; int bg,mid,card,accent,glow,ink,muted;
         Palette(String n,String d,int b,int m,int c,int a,int g,int i,int u){name=n;desc=d;bg=b;mid=m;card=c;accent=a;glow=g;ink=i;muted=u;}
@@ -73,25 +80,37 @@ public class MainActivity extends Activity {
         super.onCreate(b);pm=getPackageManager();prefs=getSharedPreferences(PREFS,MODE_PRIVATE);
         paletteIndex=clamp(prefs.getInt(P_PALETTE,1),0,palettes.length-1);
         textureIndex=clamp(prefs.getInt(P_TEXTURE,0),0,textures.length-1);
+        scrollSpeed=clamp(prefs.getInt(P_SPEED,100),40,160);
+        haptics=prefs.getBoolean(P_HAPTIC,true);particles=prefs.getBoolean(P_PARTICLES,true);magnetic=prefs.getBoolean(P_MAGNET,true);
         getWindow().setStatusBarColor(p().bg);getWindow().setNavigationBarColor(p().bg);
         buildShell();refreshApps();
     }
     private int clamp(int n,int lo,int hi){return Math.max(lo,Math.min(hi,n));}
+    private void tapHaptic(View v){
+        if(haptics){try{v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);}catch(Exception ignored){}}
+    }
     private void buildShell(){
-        Palette a=p();root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(18),dp(14),dp(18),dp(10));
+        Palette a=p();root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(18),dp(12),dp(18),dp(8));
         root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{a.bg,a.mid,a.bg}));
-        root.addView(label("A55 • 3D MULTITASKING ULTRA",11,a.glow,true),new LinearLayout.LayoutParams(-1,dp(24)));
-        root.addView(label("Recent apps",29,a.ink,true),new LinearLayout.LayoutParams(-1,dp(40)));
-        TextView pb=label("◈  PALETA: "+a.name+"  ▾",13,a.accent,true);pb.setGravity(Gravity.CENTER);pb.setBackground(material(a.card,a.glow,17));
-        pb.setOnClickListener(v->choosePalette());LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-1,dp(42));bp.setMargins(0,dp(5),0,dp(5));root.addView(pb,bp);
-        TextView tb=label("▧  TEXTURA: "+textures[textureIndex]+"  ▾",13,a.accent,true);tb.setGravity(Gravity.CENTER);tb.setBackground(material(a.card,a.accent,17));
-        tb.setOnClickListener(v->chooseTexture());LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(-1,dp(42));tp.setMargins(0,0,0,dp(5));root.addView(tb,tp);
-        countLabel=label("Preparando aplicaciones…",12,a.muted,false);root.addView(countLabel,new LinearLayout.LayoutParams(-1,dp(26)));
-        HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);scroll.setClipToPadding(false);scroll.setPadding(dp(2),dp(10),dp(2),dp(10));
-        cardsRow=new LinearLayout(this);cardsRow.setOrientation(LinearLayout.HORIZONTAL);scroll.addView(cardsRow);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-        TextView refresh=label("↻   Refresh apps",14,a.accent,true);refresh.setGravity(Gravity.CENTER);refresh.setBackground(material(a.card,a.glow,17));refresh.setOnClickListener(v->refreshApps());
-        LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(46));rp.setMargins(0,dp(5),0,dp(5));root.addView(refresh,rp);
-        TextView footer=label("Companion independiente • No es Recientes nativo",10,a.muted,false);footer.setGravity(Gravity.CENTER);root.addView(footer,new LinearLayout.LayoutParams(-1,dp(24)));
+        root.addView(label("A55 • 3D MULTITASKING ULTRA",11,a.glow,true),new LinearLayout.LayoutParams(-1,dp(22)));
+        root.addView(label("Recent apps",28,a.ink,true),new LinearLayout.LayoutParams(-1,dp(38)));
+        LinearLayout controls=new LinearLayout(this);controls.setOrientation(LinearLayout.HORIZONTAL);
+        TextView palette=label("◈ "+a.name,12,a.accent,true);palette.setGravity(Gravity.CENTER);palette.setBackground(material(a.card,a.glow,14));
+        palette.setOnClickListener(v->{tapHaptic(v);choosePalette();});LinearLayout.LayoutParams c1=new LinearLayout.LayoutParams(0,dp(40),1);c1.setMargins(0,dp(4),dp(4),dp(4));controls.addView(palette,c1);
+        TextView texture=label("▧ "+textures[textureIndex],12,a.accent,true);texture.setGravity(Gravity.CENTER);texture.setBackground(material(a.card,a.accent,14));
+        texture.setOnClickListener(v->{tapHaptic(v);chooseTexture();});LinearLayout.LayoutParams c2=new LinearLayout.LayoutParams(0,dp(40),1);c2.setMargins(dp(4),dp(4),0,dp(4));controls.addView(texture,c2);
+        root.addView(controls,new LinearLayout.LayoutParams(-1,dp(48)));
+        TextView settings=label("⚙  Interacción: velocidad, háptica, partículas y magnetismo",11,a.muted,true);
+        settings.setGravity(Gravity.CENTER);settings.setOnClickListener(v->{tapHaptic(v);showInteractionSettings();});
+        root.addView(settings,new LinearLayout.LayoutParams(-1,dp(30)));
+        countLabel=label("Preparando aplicaciones…",12,a.muted,false);root.addView(countLabel,new LinearLayout.LayoutParams(-1,dp(24)));
+        scroller=new HapticScrollView(this);scroller.setHorizontalScrollBarEnabled(false);scroller.setClipToPadding(false);scroller.setFillViewport(false);
+        scroller.setPadding(dp(2),dp(8),dp(2),dp(8));scroller.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        cardsRow=new LinearLayout(this);cardsRow.setOrientation(LinearLayout.HORIZONTAL);scroller.addView(cardsRow,new HorizontalScrollView.LayoutParams(-2,-1));
+        root.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
+        TextView refresh=label("↻   Actualizar aplicaciones",14,a.accent,true);refresh.setGravity(Gravity.CENTER);refresh.setBackground(material(a.card,a.glow,16));
+        refresh.setOnClickListener(v->{tapHaptic(v);refreshApps();});LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(44));rp.setMargins(0,dp(4),0,dp(4));root.addView(refresh,rp);
+        TextView footer=label("Compañero independiente • No es Recientes nativo",10,a.muted,false);footer.setGravity(Gravity.CENTER);root.addView(footer,new LinearLayout.LayoutParams(-1,dp(20)));
         setContentView(root);
     }
     private void choosePalette(){
@@ -105,83 +124,116 @@ public class MainActivity extends Activity {
             textureIndex=w;prefs.edit().putInt(P_TEXTURE,w).apply();d.dismiss();buildShell();refreshApps();
         }).setNegativeButton("Cancelar",null).show();
     }
-    private static final class AppEntry {
-        String name,pkg; Drawable icon;
-        AppEntry(String n,String p,Drawable i){name=n;pkg=p;icon=i;}
+    private void showInteractionSettings(){
+        LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(20),dp(8),dp(20),dp(4));
+        TextView speedLabel=label("Velocidad de desplazamiento: "+scrollSpeed+"%",15,p().ink,true);box.addView(speedLabel);
+        SeekBar speed=new SeekBar(this);speed.setMax(120);speed.setProgress(scrollSpeed-40);box.addView(speed);
+        speed.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            public void onProgressChanged(SeekBar b,int value,boolean user){speedLabel.setText("Velocidad de desplazamiento: "+(value+40)+"%");}
+            public void onStartTrackingTouch(SeekBar b){}
+            public void onStopTrackingTouch(SeekBar b){}
+        });
+        android.widget.CheckBox h=new android.widget.CheckBox(this);h.setText("Vibración háptica");h.setTextColor(p().ink);h.setChecked(haptics);box.addView(h);
+        android.widget.CheckBox part=new android.widget.CheckBox(this);part.setText("Partículas al tocar y deslizar");part.setTextColor(p().ink);part.setChecked(particles);box.addView(part);
+        android.widget.CheckBox mag=new android.widget.CheckBox(this);mag.setText("Atracción magnética / encaje de tarjetas");mag.setTextColor(p().ink);mag.setChecked(magnetic);box.addView(mag);
+        new AlertDialog.Builder(this).setTitle("Controles de interacción").setView(box).setNegativeButton("Cancelar",null).setPositiveButton("Guardar",(d,w)->{
+            scrollSpeed=speed.getProgress()+40;haptics=h.isChecked();particles=part.isChecked();magnetic=mag.isChecked();
+            prefs.edit().putInt(P_SPEED,scrollSpeed).putBoolean(P_HAPTIC,haptics).putBoolean(P_PARTICLES,particles).putBoolean(P_MAGNET,magnetic).apply();
+            if(scroller!=null)scroller.setScrollSpeed(scrollSpeed);if(scroller!=null)scroller.setEffects(particles,magnetic);
+            if(haptics)tapHaptic(root);Toast.makeText(this,"Ajustes guardados",Toast.LENGTH_SHORT).show();
+        }).show();
     }
+    private static final class AppEntry {String name,pkg;Drawable icon;AppEntry(String n,String p,Drawable i){name=n;pkg=p;icon=i;}}
     private void refreshApps(){
         final int ticket=++generation;cardsRow.removeAllViews();countLabel.setText("Cargando aplicaciones en segundo plano…");
         worker.execute(()->{
             List<AppEntry> entries=new ArrayList<>();
-            try{
-                Intent q=new Intent(Intent.ACTION_MAIN);q.addCategory(Intent.CATEGORY_LAUNCHER);
+            try{Intent q=new Intent(Intent.ACTION_MAIN);q.addCategory(Intent.CATEGORY_LAUNCHER);
                 List<ResolveInfo> list=pm.queryIntentActivities(q,0);
                 for(ResolveInfo ri:list)try{entries.add(new AppEntry(String.valueOf(ri.loadLabel(pm)),ri.activityInfo.packageName,ri.loadIcon(pm)));}catch(Exception ignored){}
                 Collections.sort(entries,Comparator.comparing(e->e.name.toLowerCase()));
             }catch(Exception ignored){}
-            final List<AppEntry> result=entries;
-            main.post(()->{if(isFinishing()||ticket!=generation)return;countLabel.setText(result.size()+" aplicaciones • Desliza horizontalmente");renderBatch(result,ticket,0);});
+            final List<AppEntry> result=entries;main.post(()->{if(isFinishing()||ticket!=generation)return;countLabel.setText(result.size()+" aplicaciones • Desliza horizontalmente");renderBatch(result,ticket,0);});
         });
     }
     private void renderBatch(List<AppEntry> list,int ticket,int start){
-        if(ticket!=generation||isFinishing())return;int end=Math.min(start+5,list.size());
-        for(int i=start;i<end;i++)addCard(list.get(i),i);
-        if(end<list.size())main.postDelayed(()->renderBatch(list,ticket,end),12);
-        if(list.isEmpty())countLabel.setText("No hay aplicaciones disponibles");
+        if(ticket!=generation||isFinishing())return;int end=Math.min(start+5,list.size());for(int i=start;i<end;i++)addCard(list.get(i),i);
+        if(end<list.size())main.postDelayed(()->renderBatch(list,ticket,end),12);if(list.isEmpty())countLabel.setText("No hay aplicaciones disponibles");
     }
     private void addCard(AppEntry e,int index){
         Palette a=p();final String pkg=e.pkg,name=e.name;
         LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(13),dp(13),dp(13),dp(11));
         card.setBackground(material(a.card,a.glow,25));card.setElevation(dp(8));card.setRotationY(index%2==0?3f:-3f);card.setTranslationY(index%2==0?0:dp(8));
-        LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(dp(218),dp(360));cp.setMargins(dp(2),dp(5),dp(12),dp(12));cardsRow.addView(card,cp);
-        LinearLayout top=new LinearLayout(this);top.setGravity(Gravity.CENTER_VERTICAL);TextView icon=new TextView(this);icon.setGravity(Gravity.CENTER);icon.setCompoundDrawablesWithIntrinsicBounds(e.icon,null,null,null);
-        top.addView(icon,new LinearLayout.LayoutParams(dp(44),dp(44)));
-        TextView close=label("×",24,a.accent,true);close.setGravity(Gravity.CENTER);top.addView(close,new LinearLayout.LayoutParams(0,dp(40),1));close.setOnClickListener(v->card.setVisibility(View.GONE));card.addView(top);
+        LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(dp(218),dp(350));cp.setMargins(dp(2),dp(5),dp(12),dp(12));cardsRow.addView(card,cp);
+        LinearLayout top=new LinearLayout(this);top.setGravity(Gravity.CENTER_VERTICAL);TextView icon=new TextView(this);icon.setGravity(Gravity.CENTER);icon.setCompoundDrawablesWithIntrinsicBounds(e.icon,null,null,null);top.addView(icon,new LinearLayout.LayoutParams(dp(44),dp(44)));
+        TextView close=label("×",24,a.accent,true);close.setGravity(Gravity.CENTER);top.addView(close,new LinearLayout.LayoutParams(0,dp(40),1));
+        close.setOnClickListener(v->{tapHaptic(v);card.animate().alpha(0f).scaleX(.85f).scaleY(.85f).setDuration(150).withEndAction(()->card.setVisibility(View.GONE)).start();});card.addView(top);
         TextView preview=label(name,21,a.ink,true);preview.setGravity(Gravity.CENTER);preview.setPadding(dp(8),dp(8),dp(8),dp(8));preview.setBackground(material(a.accent,a.glow,19));
         LinearLayout.LayoutParams vp=new LinearLayout.LayoutParams(-1,0,1);vp.setMargins(0,dp(11),0,dp(11));card.addView(preview,vp);
-        TextView packageName=label(pkg,10,a.muted,false);packageName.setMaxLines(2);card.addView(packageName,new LinearLayout.LayoutParams(-1,dp(32)));
-        TextView open=label("OPEN APP  ↗",12,a.ink,true);open.setGravity(Gravity.CENTER);open.setBackground(material(a.accent,a.glow,15));card.addView(open,new LinearLayout.LayoutParams(-1,dp(40)));
-        View.OnClickListener launch=v->{Intent intent=pm.getLaunchIntentForPackage(pkg);if(intent!=null)try{startActivity(intent);}catch(Exception ex){Toast.makeText(this,"No se pudo abrir "+name,Toast.LENGTH_SHORT).show();}};
+        TextView packageName=label(pkg,10,a.muted,false);packageName.setMaxLines(2);card.addView(packageName,new LinearLayout.LayoutParams(-1,dp(30)));
+        TextView open=label("ABRIR APLICACIÓN  ↗",12,a.ink,true);open.setGravity(Gravity.CENTER);open.setBackground(material(a.accent,a.glow,15));card.addView(open,new LinearLayout.LayoutParams(-1,dp(40)));
+        View.OnClickListener launch=v->{tapHaptic(v);v.animate().scaleX(.96f).scaleY(.96f).setDuration(70).withEndAction(()->v.animate().scaleX(1f).scaleY(1f).setDuration(100).start()).start();
+            Intent intent=pm.getLaunchIntentForPackage(pkg);if(intent!=null)try{startActivity(intent);overridePendingTransition(android.R.anim.fade_in,android.R.anim.fade_out);}catch(Exception ex){Toast.makeText(this,"No se pudo abrir "+name,Toast.LENGTH_SHORT).show();}};
         open.setOnClickListener(launch);preview.setOnClickListener(launch);card.setOnClickListener(launch);
-        card.setOnLongClickListener(v->{try{startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+pkg)));}catch(Exception ignored){}return true;});
+        card.setOnLongClickListener(v->{tapHaptic(v);try{startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+pkg)));}catch(Exception ignored){}return true;});
         card.setContentDescription(name+". Toca para abrir; mantén pulsado para información.");
     }
     @Override protected void onDestroy(){generation++;worker.shutdownNow();main.removeCallbacksAndMessages(null);super.onDestroy();}
 
-    private static final class MaterialDrawable extends Drawable {
-        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final int base,accent,radius;private final String texture;private final float density;
-        MaterialDrawable(int b,int a,int r,String t,float den){base=b;accent=a;radius=r;texture=t;density=den;}
-        private float d(float v){return v*density;}
-        private int alpha(int c,int a){return (c&0x00ffffff)|((Math.max(0,Math.min(255,a))&255)<<24);}
-        private int blend(int a,int b,float f){return Color.rgb((int)(Color.red(a)+(Color.red(b)-Color.red(a))*f),(int)(Color.green(a)+(Color.green(b)-Color.green(a))*f),(int)(Color.blue(a)+(Color.blue(b)-Color.blue(a))*f);}
-        @Override public void draw(Canvas canvas){
-            RectF r=new RectF(getBounds());if(r.width()<=0||r.height()<=0)return;
-            int save=canvas.save();Path clip=new Path();clip.addRoundRect(r,radius,radius,Path.Direction.CW);canvas.clipPath(clip);
-            paint.setStyle(Paint.Style.FILL);paint.setShader(new LinearGradient(r.left,r.top,r.right,r.bottom,base,blend(base,Color.BLACK,.2f),Shader.TileMode.CLAMP));canvas.drawRect(r,paint);paint.setShader(null);
-            paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(d(1));
-            if(texture.equals("Metal cepillado")){
-                paint.setColor(alpha(Color.WHITE,20));for(float y=r.top+2;y<r.bottom;y+=d(3))canvas.drawLine(r.left,y,r.right,y,paint);
-            }else if(texture.equals("Cuero")){
-                paint.setColor(alpha(accent,25));for(float y=r.top+5;y<r.bottom;y+=d(9))for(float x=r.left+4;x<r.right;x+=d(10))canvas.drawCircle(x,y,d(.8f),paint);
-            }else if(texture.equals("Piedra")||texture.equals("Obsidiana")){
-                paint.setColor(alpha(accent,texture.equals("Obsidiana")?48:30));
-                for(int i=0;i<5;i++){float x=r.left+r.width()*(i+1)/6f;Path vein=new Path();vein.moveTo(x,r.top);vein.lineTo(x-r.width()*.08f,r.top+r.height()*.28f);vein.lineTo(x+r.width()*.04f,r.top+r.height()*.55f);vein.lineTo(x-r.width()*.05f,r.bottom);canvas.drawPath(vein,paint);}
-            }else if(texture.equals("Papel")){
-                paint.setColor(alpha(Color.WHITE,18));for(float y=r.top+4;y<r.bottom;y+=d(7))canvas.drawLine(r.left,y,r.right,y,paint);
-            }else if(texture.equals("Agua")){
-                paint.setColor(alpha(accent,50));for(int i=0;i<5;i++){float y=r.top+r.height()*(i+1)/6f;canvas.drawOval(r.left-r.width()*.15f,y-r.height()*.025f,r.right+r.width()*.15f,y+r.height()*.025f,paint);}
-            }else if(texture.equals("Cristal facetado")){
-                paint.setColor(alpha(accent,42));Path facet=new Path();facet.moveTo(r.left,r.top+r.height()*.3f);facet.lineTo(r.left+r.width()*.45f,r.top);facet.lineTo(r.right,r.top+r.height()*.22f);facet.lineTo(r.left+r.width()*.62f,r.bottom);facet.close();canvas.drawPath(facet,paint);
-                paint.setColor(alpha(Color.WHITE,25));canvas.drawLine(r.left,r.top,r.right,r.bottom,paint);canvas.drawLine(r.right,r.top,r.left,r.bottom,paint);
-            }else{
-                paint.setColor(alpha(Color.WHITE,30));canvas.drawLine(r.left+r.width()*.12f,r.top,r.left+r.width()*.5f,r.bottom,paint);
-                paint.setColor(alpha(accent,45));canvas.drawLine(r.left,r.top+r.height()*.18f,r.right,r.top+r.height()*.06f,paint);
+    private final class HapticScrollView extends HorizontalScrollView {
+        private float downX,lastX;private int speed=scrollSpeed;private boolean drawParticles=particles,snap=magnetic;
+        private final Paint particlePaint=new Paint(Paint.ANTI_ALIAS_FLAG);private final ArrayList<Particle> sparks=new ArrayList<>();
+        HapticScrollView(android.content.Context c){super(c);setScrollSpeed(speed);setWillNotDraw(false);}
+        void setScrollSpeed(int s){speed=s;}
+        void setEffects(boolean p,boolean m){drawParticles=p;snap=m;}
+        @Override public void fling(int velocityX){super.fling((int)(velocityX*speed/100f));}
+        @Override public boolean onTouchEvent(MotionEvent e){
+            if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getX();lastX=downX;emit(downX,e.getY(),3);}
+            else if(e.getAction()==MotionEvent.ACTION_MOVE){float dx=e.getX()-lastX;if(Math.abs(dx)>dp(7)){emit(e.getX(),e.getY(),1);lastX=e.getX();}}
+            boolean result=super.onTouchEvent(e);
+            if(e.getAction()==MotionEvent.ACTION_UP||e.getAction()==MotionEvent.ACTION_CANCEL){
+                if(haptics)performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                if(snap)postDelayed(this::snapNearest,100);
             }
+            return result;
+        }
+        private void emit(float x,float y,int count){
+            if(!drawParticles)return;
+            for(int i=0;i<count;i++)sparks.add(new Particle(x,y,(float)(Math.random()*2.8-1.4),(float)(Math.random()*-2.5-0.3),System.currentTimeMillis()));
+            if(sparks.size()>36)while(sparks.size()>36)sparks.remove(0);invalidate();
+        }
+        private void snapNearest(){
+            if(getChildCount()==0)return;View child=getChildAt(0);if(!(child instanceof LinearLayout))return;
+            LinearLayout row=(LinearLayout)child;int center=getScrollX()+getWidth()/2;View best=null;int distance=Integer.MAX_VALUE;
+            for(int i=0;i<row.getChildCount();i++){View c=row.getChildAt(i);int cCenter=c.getLeft()+c.getWidth()/2;int d=Math.abs(cCenter-center);if(d<distance){distance=d;best=c;}}
+            if(best!=null){int target=best.getLeft()+best.getWidth()/2-getWidth()/2;target=Math.max(0,Math.min(target,Math.max(0,child.getWidth()-getWidth())));
+                if(Math.abs(target-getScrollX())>dp(12)){smoothScrollTo(target,0);if(haptics)performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}}
+        }
+        @Override protected void dispatchDraw(Canvas canvas){super.dispatchDraw(canvas);if(!drawParticles||sparks.isEmpty())return;
+            long now=System.currentTimeMillis();particlePaint.setStyle(Paint.Style.FILL);
+            for(int i=sparks.size()-1;i>=0;i--){Particle q=sparks.get(i);float age=(now-q.born)/420f;if(age>=1){sparks.remove(i);continue;}
+                particlePaint.setColor((int)((1f-age)*150)<<24 | (p().glow&0x00ffffff));canvas.drawCircle(q.x+q.vx*age*35,q.y+(q.vy*age*35)+(age*age*dp(18)),dp((1-age)*2.6f+.5f),particlePaint);}
+            if(!sparks.isEmpty())postInvalidateDelayed(16);
+        }
+        private final class Particle{float x,y,vx,vy;long born;Particle(float a,float b,float c,float d,long t){x=a;y=b;vx=c;vy=d;born=t;}}
+    }
+    private static final class MaterialDrawable extends Drawable {
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private final int base,accent,radius;private final String texture;private final float density;
+        MaterialDrawable(int b,int a,int r,String t,float den){base=b;accent=a;radius=r;texture=t;density=den;}
+        private float d(float v){return v*density;}private int alpha(int c,int a){return(c&0x00ffffff)|((Math.max(0,Math.min(255,a))&255)<<24);}
+        private int blend(int a,int b,float f){return Color.rgb((int)(Color.red(a)+(Color.red(b)-Color.red(a))*f),(int)(Color.green(a)+(Color.green(b)-Color.green(a))*f),(int)(Color.blue(a)+(Color.blue(b)-Color.blue(a))*f));}
+        @Override public void draw(Canvas canvas){
+            RectF r=new RectF(getBounds());if(r.width()<=0||r.height()<=0)return;int save=canvas.save();Path clip=new Path();clip.addRoundRect(r,radius,radius,Path.Direction.CW);canvas.clipPath(clip);
+            paint.setStyle(Paint.Style.FILL);paint.setShader(new LinearGradient(r.left,r.top,r.right,r.bottom,base,blend(base,Color.BLACK,.2f),Shader.TileMode.CLAMP));canvas.drawRect(r,paint);paint.setShader(null);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(d(1));
+            if(texture.equals("Metal cepillado")){paint.setColor(alpha(Color.WHITE,20));for(float y=r.top+2;y<r.bottom;y+=d(3))canvas.drawLine(r.left,y,r.right,y,paint);}
+            else if(texture.equals("Cuero")){paint.setColor(alpha(accent,25));for(float y=r.top+5;y<r.bottom;y+=d(9))for(float x=r.left+4;x<r.right;x+=d(10))canvas.drawCircle(x,y,d(.8f),paint);}
+            else if(texture.equals("Piedra")||texture.equals("Obsidiana")){paint.setColor(alpha(accent,texture.equals("Obsidiana")?48:30));for(int i=0;i<5;i++){float x=r.left+r.width()*(i+1)/6f;Path v=new Path();v.moveTo(x,r.top);v.lineTo(x-r.width()*.08f,r.top+r.height()*.28f);v.lineTo(x+r.width()*.04f,r.top+r.height()*.55f);v.lineTo(x-r.width()*.05f,r.bottom);canvas.drawPath(v,paint);}}
+            else if(texture.equals("Papel")){paint.setColor(alpha(Color.WHITE,18));for(float y=r.top+4;y<r.bottom;y+=d(7))canvas.drawLine(r.left,y,r.right,y,paint);}
+            else if(texture.equals("Agua")){paint.setColor(alpha(accent,50));for(int i=0;i<5;i++){float y=r.top+r.height()*(i+1)/6f;canvas.drawOval(r.left-r.width()*.15f,y-r.height()*.025f,r.right+r.width()*.15f,y+r.height()*.025f,paint);}}
+            else if(texture.equals("Cristal facetado")){paint.setColor(alpha(accent,42));Path f=new Path();f.moveTo(r.left,r.top+r.height()*.3f);f.lineTo(r.left+r.width()*.45f,r.top);f.lineTo(r.right,r.top+r.height()*.22f);f.lineTo(r.left+r.width()*.62f,r.bottom);f.close();canvas.drawPath(f,paint);paint.setColor(alpha(Color.WHITE,25));canvas.drawLine(r.left,r.top,r.right,r.bottom,paint);canvas.drawLine(r.right,r.top,r.left,r.bottom,paint);}
+            else{paint.setColor(alpha(Color.WHITE,30));canvas.drawLine(r.left+r.width()*.12f,r.top,r.left+r.width()*.5f,r.bottom,paint);paint.setColor(alpha(accent,45));canvas.drawLine(r.left,r.top+r.height()*.18f,r.right,r.top+r.height()*.06f,paint);}
             paint.setColor(alpha(accent,105));canvas.drawRoundRect(r,radius,radius,paint);paint.setStyle(Paint.Style.FILL);canvas.restoreToCount(save);
         }
-        @Override public void setAlpha(int a){paint.setAlpha(a);invalidateSelf();}
-        @Override public void setColorFilter(android.graphics.ColorFilter f){paint.setColorFilter(f);invalidateSelf();}
-        @Override public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
+        @Override public void setAlpha(int a){paint.setAlpha(a);invalidateSelf();}@Override public void setColorFilter(android.graphics.ColorFilter f){paint.setColorFilter(f);invalidateSelf();}@Override public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
     }
 }
